@@ -10,7 +10,7 @@ import { TTLMap } from "@utils/TTLMap";
 
 import { ScrobblerBackend, settings, TrackData } from ".";
 
-const logger = new Logger("AudioScrobblerRichPresence/ListenBrainz");
+const logger = new Logger("MusicRichPresence/ListenBrainz");
 
 // 15 minutes
 const coverArtCache = new TTLMap<string, string>(15 * 60 * 1000);
@@ -75,7 +75,8 @@ async function getUrls(
     additionalInfo: Record<string, string> | undefined,
     trackName: string,
     artistName: string,
-    releaseName: string
+    releaseName: string,
+    useLabs: boolean = false
 ): Promise<Partial<TrackData>> {
     // Well tagged music will have MBIDs which we can use directly. These are optional but highly recommended in ListenBrainz scrobbles.
     // If your music doesn't have these, it's highly recommended to use https://picard.musicbrainz.org/ to automatically add them
@@ -94,23 +95,41 @@ async function getUrls(
         };
     }
 
-    // If no MBIDs are present, try searching MusicBrainz: first by ISRC (if present), then by name.
-    const nameQuery = encodeURIComponent(
-        `artist:"${artistName}" AND recording:"${trackName}"${releaseName ? ` AND release:"${releaseName}"` : ""}`
-    ).replace(/[!()*\-~]/g, "\\$&");
+    let metadata: Record<string, any> | undefined;
+    let query: string;
 
-    const queries = additionalInfo?.isrc
-        ? [encodeURIComponent(`isrc:${additionalInfo.isrc}`), nameQuery]
-        : [nameQuery];
+    // ListenBrainz Labs lookup
+    if (useLabs) {
+        const query = `${trackName} - ${artistName}`;
 
-    for (const query of queries) {
         if (metadataCache.has(query)) {
             return metadataCache.get(query) ?? {};
         }
 
-        const metadata = await tryLookup(query);
-        if (!metadata) continue;
+        const rid = await fetch("https://labs.api.listenbrainz.org/recording-search/json?" + new URLSearchParams({ query }), {
+            headers: { "User-Agent": VENCORD_USER_AGENT }
+        })
+            .then(res => res.ok ? res.json() : Promise.reject(new Error(`${res.status} ${res.statusText}`)))
+            .then(json => json[0].recording_mbid);
 
+        metadata = await tryLookup(`rid:${rid}`);
+    } else {
+        // If no MBIDs are present, try searching MusicBrainz: first by ISRC (if present), then by name.
+        const nameQuery = encodeURIComponent(
+            `artist:"${artistName}" AND recording:"${trackName}"${releaseName ? ` AND release:"${releaseName}"` : ""}`
+        ).replace(/[!()*\-~]/g, "\\$&");
+
+        // FIXME: what if the isrc doesn't exist in the musicbrainz database? orig used a tuple to solve this
+        // but it gets complex with the introduction of labs
+        query = additionalInfo?.isrc ? encodeURIComponent(`isrc:${additionalInfo.isrc}`) : nameQuery;
+        if (metadataCache.has(query)) {
+            return metadataCache.get(query) ?? {};
+        }
+
+        metadata = await tryLookup(query);
+    }
+
+    if (metadata) {
         const artist = metadata["artist-credit"]?.[0]?.artist;
         const release = metadata.releases?.find((release: { title: string; }) => release.title === releaseName) || metadata.releases?.[0];
 
@@ -125,16 +144,17 @@ async function getUrls(
             artistURL: artist?.id ? url(`/artist/${artist.id}/`) : undefined,
             album: additionalInfo?.release_name ?? release?.title ?? "Unknown",
         };
-        metadataCache.set(query, data);
+
+        metadataCache.set(query!, data);
         return data;
+    } else {
+        console.log(query!);
+        const fallback: Partial<TrackData> = additionalInfo?.origin_url
+            ? { imageURL: fallbackToYoutubeThumbnail(additionalInfo.origin_url) }
+            : {};
+        metadataCache.set(query!, fallback);
+        return fallback;
     }
-
-    const fallback: Partial<TrackData> = additionalInfo?.origin_url
-        ? { imageURL: fallbackToYoutubeThumbnail(additionalInfo.origin_url) }
-        : {};
-    metadataCache.set(queries.at(-1)!, fallback);
-
-    return fallback;
 }
 
 export const ListenBrainzScrobbler: ScrobblerBackend = {
@@ -157,7 +177,7 @@ export const ListenBrainzScrobbler: ScrobblerBackend = {
                 artist: artist_name,
                 album: release_name || "Unknown",
                 serviceName: additional_info?.music_service_name || additional_info?.submission_client,
-                ...await getUrls(additional_info, track_name, artist_name, release_name)
+                ...await getUrls(additional_info, track_name, artist_name, release_name, settings.store.useListenbrainzLabs)
             } as TrackData;
 
             return trackData;

@@ -126,6 +126,11 @@ export const settings = definePluginSettings({
         type: OptionType.BOOLEAN,
         default: true,
     },
+    useListenbrainzLabs: {
+        description: "(ListenBrainz-like only) Use the ListenBrainz Labs API to look up track metadata. Has a higher success rate especially when your scrobbler doesn't report any metadata other than track and artist names.",
+        type: OptionType.BOOLEAN,
+        default: false
+    },
     hideWithSpotify: {
         description: "Hide presence if Spotify is running",
         type: OptionType.BOOLEAN,
