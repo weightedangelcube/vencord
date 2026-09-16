@@ -51,7 +51,7 @@ async function fetchCoverArtArchive(id: string, path: string) {
     return url;
 }
 
-async function fetchCoverArt(releaseMBID: string, releaseGroupMBID: string, originUrl?: string): Promise<string | undefined> {
+async function fetchCoverArt(releaseGroupMBID: string, releaseMBID?: string, originUrl?: string): Promise<string | undefined> {
     return (
         (releaseMBID && await fetchCoverArtArchive(releaseMBID, `/release/${releaseMBID}`).catch(() => null)) ||
         (releaseGroupMBID && await fetchCoverArtArchive(releaseGroupMBID, `/release-group/${releaseGroupMBID}`).catch(() => null)) ||
@@ -68,7 +68,8 @@ async function tryLookup(query: string): Promise<Record<string, any> | undefined
         headers: { "User-Agent": VENCORD_USER_AGENT }
     })
         .then(res => res.ok ? res.json() : Promise.reject(new Error(`${res.status} ${res.statusText}`)))
-        .then(json => json.recordings?.[0]);
+        .then(json => json.recordings?.[0])
+        .catch(() => undefined);
 }
 
 async function getUrls(
@@ -100,7 +101,7 @@ async function getUrls(
 
     // ListenBrainz Labs lookup
     if (useLabs) {
-        const query = `${trackName} - ${artistName}`;
+        query = `${trackName} - ${artistName}`;
 
         if (metadataCache.has(query)) {
             return metadataCache.get(query) ?? {};
@@ -134,13 +135,11 @@ async function getUrls(
         const release = metadata.releases?.find((release: { title: string; }) => release.title === releaseName) || metadata.releases?.[0];
 
         const data: Partial<TrackData> = {
-            imageURL: await fetchCoverArt(release?.id, release?.["release-group"]?.id, additionalInfo?.origin_url),
+            imageURL: await fetchCoverArt(release?.["release-group"]?.id, undefined, additionalInfo?.origin_url),
             trackURL: url(`/track/${metadata.id}/`),
-            albumURL: release?.id
-                ? url(`/release/${release.id}/`)
-                : release?.["release-group"]?.id
-                    ? url(`/release-group/${release["release-group"].id}/`)
-                    : undefined,
+            albumURL: release?.["release-group"]?.id
+                ? url(`/release-group/${release["release-group"].id}/`)
+                : undefined,
             artistURL: artist?.id ? url(`/artist/${artist.id}/`) : undefined,
             album: additionalInfo?.release_name ?? release?.title ?? "Unknown",
         };
@@ -148,7 +147,6 @@ async function getUrls(
         metadataCache.set(query!, data);
         return data;
     } else {
-        console.log(query!);
         const fallback: Partial<TrackData> = additionalInfo?.origin_url
             ? { imageURL: fallbackToYoutubeThumbnail(additionalInfo.origin_url) }
             : {};
